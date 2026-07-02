@@ -29,8 +29,9 @@ mcp = FastMCP(
     name="document-repository",
     instructions=(
         "PRD and architecture document repository for the PRD Triage Agent. "
-        "Exposes four read-only tools: list_prds, get_prd, "
-        "get_architecture_context, get_similar_prds."
+        "Exposes four read-only document tools (list_prds, get_prd, "
+        "get_architecture_context, get_similar_prds) plus triage_prd which "
+        "runs the full multi-agent triage pipeline."
     ),
 )
 
@@ -74,6 +75,28 @@ def get_similar_prds(query: str, top_k: int = 3) -> list[dict]:
     descending ``similarity_score``.
     """
     return _get_similar_prds(query, top_k)
+
+
+@mcp.tool()
+def triage_prd(prd_id: str) -> dict:
+    """Run the full PRD triage pipeline on the given PRD.
+
+    Executes: intake → policy gate → 4 specialist agents in parallel
+    (completeness, clarity, architecture, risk) → synthesis. Returns the
+    complete TriageReport as a dict, including verdict
+    (pass / needs_clarification / reject), specialist reports, clarifying
+    questions, and audit trail.
+
+    Note: this is a long-running tool (10-30s) because it calls multiple LLM
+    agents. Requires ``GOOGLE_API_KEY`` for the LLM-based analysis; without it,
+    returns an intake/policy-only result with ``status="terminated"``. Never
+    raises — expected failures (missing PRD, policy reject) come back as a
+    TriageReport with the appropriate verdict.
+    """
+    from agents.orchestrator import triage
+
+    report = triage(prd_id)
+    return report.model_dump(mode="json")
 
 
 def main() -> None:

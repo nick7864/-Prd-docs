@@ -174,7 +174,7 @@ def triage(prd_id: str) -> TriageReport:
     # NOTE: This path is exercised in integration tests with GOOGLE_API_KEY set.
     # The Runner API may vary by ADK version; see ADK docs for current usage.
     try:
-        result = asyncio.run(_run_adk_pipeline(prd_id, prd["content"]))
+        result = _run_coro_safely(_run_adk_pipeline(prd_id, prd["content"]))
         audit.append(AuditEntry(stage="specialists", status="completed"))
         audit.append(AuditEntry(stage="synthesis", status="completed"))
         result.audit_trail = audit
@@ -192,6 +192,25 @@ def triage(prd_id: str) -> TriageReport:
             audit_trail=audit,
             policy_decision=decision,
         )
+
+
+def _run_coro_safely(coro):
+    """Run a coroutine to completion, handling nested event loops.
+
+    ``asyncio.run`` raises if called from inside a running event loop (e.g.
+    when ``triage()`` is invoked from the MCP server's async context, or any
+    async framework). When a running loop is detected, the coroutine is driven
+    in a worker thread (which has no parent loop), so ``asyncio.run`` works
+    there. Otherwise ``asyncio.run`` is used directly.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 async def _run_adk_pipeline(prd_id: str, prd_content: str) -> TriageReport:
