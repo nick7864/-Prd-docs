@@ -1,5 +1,7 @@
 # PRD Triage Agent
 
+**Languages / 語言**: English · [繁體中文](README.zh-TW.md)
+
 > Multi-agent PRD intake checkup for software teams. Built for the Google × Kaggle **AI Agents Intensive Vibe Coding Capstone Project** (2026).
 
 ![Architecture](assets/architecture.png)
@@ -235,7 +237,8 @@ Project/
 │   └── skills/prd-analysis/     # Custom ADK Skill (Level 3)
 ├── Dockerfile                   # Cloud Run image
 ├── pyproject.toml               # uv-managed dependencies
-└── README.md                    # This file
+├── README.md                    # This file (English)
+└── README.zh-TW.md              # Traditional Chinese
 ```
 
 ## Tech stack
