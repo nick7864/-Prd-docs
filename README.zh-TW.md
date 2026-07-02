@@ -31,50 +31,27 @@
 
 ## 架構
 
+```mermaid
+flowchart TD
+    A["triage(prd_id)<br/>入口函式"] --> B["Document MCP 文件伺服器<br/>（4 個 tools）"]
+    B -->|get_prd| C{"政策閘門<br/>regex + PII"}
+    C -->|拒絕 reject| D["TriageReport(reject)"]
+    C -->|通過 allowed| E["ParallelAgent<br/>平行分派"]
+    E --> F["完整性檢查<br/>Completeness"]
+    E --> G["清晰度檢查<br/>Clarity"]
+    E --> H["架構契合<br/>Architecture"]
+    E --> I["風險合規<br/>Risk"]
+    F --> J["Synthesis 合成 Agent<br/>（critical-risk veto）"]
+    G --> J
+    H --> J
+    I --> J
+    J --> K["verdict<br/>pass / needs_clarification"]
+    K --> L["HITL 閘門 (D5)<br/>暫停 → PM 問答 → 恢復"]
+    L --> M["工時估算 + 工單拆解 (D7)<br/>Estimation + Breakdown"]
+    M --> N["Markdown 報告輸出<br/>reports/&lt;id&gt;-&lt;ts&gt;.md"]
 ```
-                    ┌─────────────────────────────────┐
-                    │         triage(prd_id)           │
-                    └──────────────┬──────────────────┘
-                                   │
-                          ┌────────▼────────┐
-                          │  Document MCP   │
-                          │  Server (4 tools)│
-                          └────────┬────────┘
-                                   │ get_prd()
-                          ┌────────▼────────┐
-                          │  Policy Gate    │──reject──► TriageReport(reject)
-                          │  (regex + PII)  │
-                          └────────┬────────┘
-                                   │ allowed
-                    ┌──────────────▼──────────────┐
-                    │   ParallelAgent (fan-out)    │
-                    ├──────────┬──────────┬───────┐│
-                    │Completeness│ Clarity │Arch│Risk│
-                    └──────────┴──────────┴───┴───┘│
-                              └─────────┬──────────┘
-                                        │
-                          ┌─────────────▼─────────────┐
-                          │   Synthesis Agent          │
-                          │   (critical-risk veto)     │
-                          └─────────────┬─────────────┘
-                                        │
-                          verdict: pass / needs_clarification
-                                        │
-                          ┌─────────────▼─────────────┐
-                          │   HITL Gate (D5)           │
-                          │   pause → PM Q&A → resume  │
-                          └─────────────┬─────────────┘
-                                        │
-                          ┌─────────────▼─────────────┐
-                          │  Estimation + Breakdown    │
-                          │  (D7 bonus)                │
-                          └─────────────┬─────────────┘
-                                        │
-                          ┌─────────────▼─────────────┐
-                          │  Markdown Report Writer    │
-                          │  reports/<id>-<ts>.md      │
-                          └───────────────────────────┘
-```
+
+> 上圖為 Mermaid 流程圖，在 GitHub / VS Code 預覽中可直接渲染。英文 ASCII 版見 [README.md](README.md#architecture)。
 
 **核心概念對照**：
 
