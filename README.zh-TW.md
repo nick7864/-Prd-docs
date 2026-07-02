@@ -4,7 +4,7 @@
 
 > 面向軟體團隊的多 Agent PRD 收案健檢系統。為 Google × Kaggle **AI Agents Intensive Vibe Coding Capstone Project**（2026）而建。
 
-![Architecture](assets/architecture.png)
+![Architecture](assets/architecture.zh-TW.png)
 
 **賽道**：Agents for Business  
 **核心概念**：ADK · MCP · Antigravity · Security · Deployability · Skills（目標 6/6）
