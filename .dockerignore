@@ -1,0 +1,63 @@
+# Docker build context — exclude everything not needed in the production image.
+# This keeps the image small and build cache effective.
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Virtual environments (deps are installed fresh inside the container)
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated reports (runtime output, not needed in image)
+reports/
+
+# Spectra / spec artifacts (not needed at runtime)
+openspec/
+
+# ADK skill scaffolding (not needed in image; skills are loaded by Antigravity, not the server)
+.agent/
+.agents/
+.cursor/
+
+# Opencode config
+.opencode/
+.omo/
+
+# Vector search cache (rebuilt on first run in container)
+openspec/.vector-search.db*
+
+# Lock files (uv.lock IS needed for reproducible builds — keep it)
+# uv.lock — DO NOT exclude
+
+# Documentation (not needed at runtime)
+WRITEUP.md
+*.md
+!data/**/*.md
+!README.md

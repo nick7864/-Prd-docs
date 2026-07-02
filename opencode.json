@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "prd-docs": {
+      "type": "stdio",
+      "command": ["uv", "run", "python", "-m", "doc_mcp.server"],
+      "enabled": true
+    }
+  }
+}

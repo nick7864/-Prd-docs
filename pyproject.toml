@@ -1,0 +1,41 @@
+[project]
+name = "prd-triager"
+version = "0.1.0"
+description = "PRD Triage Agent — multi-agent intake checkup for product requirement docs"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # ADK 2.0 + Gemini
+    "google-adk>=2.0",
+    "google-genai>=1.0",
+    # MCP server
+    "mcp>=1.0",
+    # Structured output + schemas
+    "pydantic>=2",
+    "python-frontmatter>=1.1",
+    "pyyaml>=6.0",
+    # Web framework for deployment (D6)
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pillow>=12.2.0",
+    "imageio-ffmpeg>=0.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+sources = ["src"]
+packages = ["src/agents", "src/doc_mcp", "src/models", "src/policy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]

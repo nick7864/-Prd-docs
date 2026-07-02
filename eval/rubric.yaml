@@ -1,0 +1,59 @@
+version: 1
+description: "LLM-as-judge rubric for PRD Triage Agent evaluation"
+
+criteria:
+  - id: policy_gate_accuracy
+    name: "Policy Gate Accuracy"
+    weight: 0.20
+    description: >
+      Does the policy gate correctly reject PRDs containing PII or secrets,
+      and correctly pass clean PRDs?
+    pass_threshold: 1.0
+    test_cases:
+      - prd-003 must be rejected with violation type 'google_api_key'
+      - prd-001 must pass policy gate cleanly
+
+  - id: completeness_detection
+    name: "Completeness Detection"
+    weight: 0.25
+    description: >
+      Does the Completeness Checker correctly identify missing sections
+      and assign appropriate severity?
+    pass_threshold: 0.8
+    test_cases:
+      - prd-002 (missing AC) → completeness_score < 60, missing_sections includes 'acceptance_criteria' with severity 'high'
+      - prd-001 (complete) → completeness_score ≥ 80, missing_sections is empty
+
+  - id: clarity_detection
+    name: "Clarity Detection"
+    weight: 0.20
+    description: >
+      Does the Clarity Checker flag vague quantifiers and generate
+      specific clarifying questions?
+    pass_threshold: 0.8
+    test_cases:
+      - prd-004 → ambiguous_items contains ≥1 entry with type 'vague_quantifier' for 'fast'
+      - Each vague term has a generated_question starting with a verb (Define, Specify, etc.)
+
+  - id: synthesis_verdict
+    name: "Synthesis Verdict Correctness"
+    weight: 0.20
+    description: >
+      Does the Synthesis Agent produce the correct overall verdict
+      based on specialist findings?
+    pass_threshold: 0.8
+    test_cases:
+      - prd-001 → verdict 'pass'
+      - prd-002 → verdict 'needs_clarification'
+      - prd-004 → verdict 'needs_clarification'
+
+  - id: critical_risk_veto
+    name: "Critical Risk Veto"
+    weight: 0.15
+    description: >
+      Does the deterministic veto correctly force needs_clarification
+      when a critical risk finding is present?
+    pass_threshold: 1.0
+    test_cases:
+      - Any TriageReport with a CRITICAL severity risk finding → verdict must be 'needs_clarification' (not 'pass')
+      - Veto must NOT override a policy-gate 'reject' verdict
