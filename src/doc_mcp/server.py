@@ -16,6 +16,12 @@ file/embedding logic lives in repository.py for unit testability.
 """
 from __future__ import annotations
 
+from dotenv import load_dotenv
+
+# Load .env (e.g. GOOGLE_API_KEY) before sibling modules read env vars.
+# No-op when .env is absent; see .env.example for required vars.
+load_dotenv()
+
 from mcp.server.fastmcp import FastMCP
 
 from .repository import (

@@ -26,6 +26,12 @@ requirement "Pipeline SHALL be orchestrated via ADK workflow graph".
 """
 from __future__ import annotations
 
+from dotenv import load_dotenv
+
+# Load .env (e.g. GOOGLE_API_KEY) for CLI / FastAPI / pytest entry points that
+# bypass the MCP server. No-op when .env is absent.
+load_dotenv()
+
 import asyncio
 from typing import Any
 

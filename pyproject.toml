@@ -14,6 +14,8 @@ dependencies = [
     "pydantic>=2",
     "python-frontmatter>=1.1",
     "pyyaml>=6.0",
+    # .env loading so MCP server / pytest pick up GOOGLE_API_KEY locally
+    "python-dotenv>=1.0",
     # Web framework for deployment (D6)
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
