@@ -21,7 +21,7 @@ import pytest  # noqa: E402
 
 @pytest.mark.asyncio
 async def test_mcp_client_can_connect_and_list_tools():
-    """A real MCP client connects to the server and discovers 4 tools."""
+    """A real MCP client connects to the server and discovers 5 tools."""
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
@@ -51,7 +51,8 @@ async def test_mcp_client_can_connect_and_list_tools():
                 "get_prd",
                 "get_architecture_context",
                 "get_similar_prds",
-            }, f"Expected 4 tools, got: {tool_names}"
+                "triage_prd",
+            }, f"Expected 5 tools, got: {tool_names}"
 
             # Each tool must have a description and input schema
             for tool in tools_result.tools:

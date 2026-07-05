@@ -131,6 +131,13 @@ def _no_api_key(monkeypatch):
     """
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    # Also clear multi-model provider keys so a configured GLM (TRIAGE_*) in
+    # .env does not make these unit tests hit the real LLM.
+    for _key in (
+        "TRIAGE_MODEL_PROVIDER", "TRIAGE_MODEL", "TRIAGE_API_BASE", "TRIAGE_API_KEY",
+        "ZHIPUAI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+    ):
+        monkeypatch.delenv(_key, raising=False)
 
 
 def test_get_similar_prds_no_api_key_returns_list():
@@ -186,8 +193,8 @@ def test_get_similar_prds_no_prds(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_advertises_four_tools():
-    """FastMCP server registers all four tools with non-empty schemas."""
+async def test_mcp_server_advertises_five_tools():
+    """FastMCP server registers all five tools with non-empty schemas."""
     from doc_mcp.server import mcp as mcp_server
 
     # FastMCP exposes tools via async list_tools on the underlying server.
@@ -198,6 +205,7 @@ async def test_mcp_server_advertises_four_tools():
         "get_prd",
         "get_architecture_context",
         "get_similar_prds",
+        "triage_prd",
     }
     for tool in tools:
         assert tool.description, f"{tool.name} missing description"

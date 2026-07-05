@@ -27,7 +27,12 @@ from agents.completeness import completeness_checker  # noqa: E402
 from agents.clarity import clarity_checker  # noqa: E402
 from agents.synthesis import synthesis_agent  # noqa: E402
 from agents.orchestrator import root_agent, specialists_parallel, triage  # noqa: E402
-from models.schemas import ClarityReport, CompletenessReport, TriageReport  # noqa: E402
+from models.schemas import (  # noqa: E402
+    ClarityReport,
+    CompletenessReport,
+    SynthesisOutput,
+    TriageReport,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -81,11 +86,11 @@ class TestSynthesisAgent:
     def test_is_llm_agent(self):
         assert isinstance(synthesis_agent, LlmAgent)
 
-    def test_has_triage_report_schema(self):
-        assert synthesis_agent.output_schema is TriageReport
+    def test_has_synthesis_output_schema(self):
+        assert synthesis_agent.output_schema is SynthesisOutput
 
     def test_has_output_key(self):
-        assert synthesis_agent.output_key == "triage_report"
+        assert synthesis_agent.output_key == "synthesis_output"
 
     def test_instruction_mentions_verdict_rules(self):
         assert "PASS" in synthesis_agent.instruction
@@ -156,6 +161,28 @@ class TestPipelineGraph:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def _no_model_key(monkeypatch):
+    """Force `_has_model_key()` to return False by clearing every provider key.
+
+    Needed because multi-model support means a configured GLM (TRIAGE_API_KEY)
+    counts as "has key" — tests that exercise the no-key terminated path must
+    clear all provider keys, not just GOOGLE_API_KEY.
+    """
+    for key in (
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "TRIAGE_MODEL_PROVIDER",
+        "TRIAGE_MODEL",
+        "TRIAGE_API_BASE",
+        "TRIAGE_API_KEY",
+        "ZHIPUAI_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
 class TestTriageEntryIntake:
     """triage() handles intake failures without GOOGLE_API_KEY."""
 
@@ -186,11 +213,9 @@ class TestTriageEntryPolicy:
 class TestTriageEntryCleanPRD:
     """triage() on a clean PRD without API key returns early with terminated status."""
 
-    def test_triage_prd_001_without_api_key(self, monkeypatch):
-        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    def test_triage_prd_001_without_api_key(self, monkeypatch, _no_model_key):
         report = triage("prd-001")
-        # Without API key, the pipeline can't run specialists.
+        # Without any provider key, the pipeline can't run specialists.
         # It should return with status="terminated" and an audit trail note.
         assert report.prd_id == "prd-001"
         assert report.status == "terminated"
@@ -281,3 +306,41 @@ class TestClarityIntegration:
     def test_clean_prd_no_findings(self):
         """prd-001 has quantified targets → no vague_quantifier findings."""
         pytest.skip("Runner wiring TBD")
+
+
+# ---------------------------------------------------------------------------
+# Multi-model support (add-multi-model-support): all agents use build_model()
+# ---------------------------------------------------------------------------
+
+from agents.architecture import architecture_checker  # noqa: E402
+from agents.risk import risk_checker  # noqa: E402
+
+
+class TestAllAgentsUseBuildModel:
+    """Every agent's model comes from build_model() — never a hardcoded string."""
+
+    @pytest.mark.parametrize(
+        "agent",
+        [
+            completeness_checker,
+            clarity_checker,
+            architecture_checker,
+            risk_checker,
+            synthesis_agent,
+        ],
+    )
+    def test_model_is_set(self, agent):
+        # build_model() returns either a Gemini model string or a LiteLlm wrapper;
+        # both are truthy. A hardcoded None or empty would fail here.
+        assert agent.model, f"{agent.name} has no model"
+
+
+    def test_default_model_is_gemini(self, monkeypatch):
+        # With no TRIAGE_MODEL_* env, build_model() returns the Gemini default.
+        for key in (
+            "TRIAGE_MODEL_PROVIDER", "TRIAGE_MODEL",
+            "TRIAGE_API_BASE", "TRIAGE_API_KEY",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        from agents._model import build_model
+        assert build_model() == "gemini-2.5-flash"

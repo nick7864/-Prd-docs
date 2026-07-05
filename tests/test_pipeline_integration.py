@@ -79,12 +79,38 @@ def _mock_needs_clarification_report(prd_id: str) -> TriageReport:
     )
 
 
-async def _mock_pass_pipeline(prd_id: str, content: str) -> TriageReport:
-    return _mock_pass_report(prd_id)
+async def _mock_pass_pipeline(prd_id: str, content: str, audit: list) -> TriageReport:
+    # Simulate what _assemble_report does: fold specialists/synthesis into the
+    # caller's audit (which already holds intake + policy entries).
+    audit.append(AuditEntry(stage="specialists", status="completed"))
+    audit.append(AuditEntry(stage="synthesis", status="completed"))
+    return TriageReport(
+        prd_id=prd_id,
+        verdict=Verdict.PASS,
+        completeness=CompletenessReport(
+            completeness_score=88,
+            missing_sections=[],
+            raw_analysis="All five required sections present with good detail.",
+        ),
+        audit_trail=audit,
+    )
 
 
-async def _mock_clarify_pipeline(prd_id: str, content: str) -> TriageReport:
-    return _mock_needs_clarification_report(prd_id)
+async def _mock_clarify_pipeline(prd_id: str, content: str, audit: list) -> TriageReport:
+    audit.append(AuditEntry(stage="specialists", status="completed"))
+    audit.append(AuditEntry(stage="synthesis", status="completed"))
+    return TriageReport(
+        prd_id=prd_id,
+        verdict=Verdict.NEEDS_CLARIFICATION,
+        completeness=CompletenessReport(
+            completeness_score=42,
+            missing_sections=[
+                MissingSection(section="acceptance_criteria", severity=Severity.HIGH)
+            ],
+            raw_analysis="PRD lacks Given/When/Then acceptance criteria entirely.",
+        ),
+        audit_trail=audit,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -154,10 +180,10 @@ class TestFullPipelineMocked:
         call_count = 0
         original = _run_adk_pipeline
 
-        def counting_stub(prd_id, content):
+        def counting_stub(prd_id, content, audit):
             nonlocal call_count
             call_count += 1
-            return original(prd_id, content)
+            return original(prd_id, content, audit)
 
         import agents.orchestrator as orch
         monkeypatch_target = orch._run_adk_pipeline
@@ -182,7 +208,7 @@ class TestFullPipelineMocked:
         assert "prd-001" in markdown
         assert "88/100" in markdown  # completeness score
         assert "`pass`" in markdown  # verdict
-        assert "## Audit Trail" in markdown
+        assert "## 審計軌跡" in markdown
 
     def test_veto_applied_in_pipeline(self, _mock_pipeline_pass, monkeypatch):
         """Critical risk veto runs AFTER synthesis in the pipeline."""

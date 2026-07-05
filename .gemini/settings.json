@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "document-repository": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "doc_mcp.server"],
+      "cwd": ".",
+      "trust": true
+    }
+  }
+}

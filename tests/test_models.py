@@ -34,7 +34,10 @@ from models.schemas import (  # noqa: E402
     PolicyViolation,
     RiskFinding,
     RiskReport,
+    SessionNotFound,
+    SessionState,
     Severity,
+    SynthesisOutput,
     Ticket,
     TriageReport,
     Verdict,
@@ -326,3 +329,77 @@ def test_triage_report_json_serialization():
     assert parsed["verdict"] == "pass"
     r2 = TriageReport.model_validate_json(blob)
     assert r2.prd_id == "x"
+
+
+def test_session_state_round_trip():
+    """SessionState serializes and re-validates with its nested report intact."""
+    from datetime import datetime, timezone
+
+    partial = TriageReport(
+        prd_id="prd-002",
+        verdict=Verdict.NEEDS_CLARIFICATION,
+        status="awaiting_pm",
+        clarifying_questions=[
+            ClarifyingQuestion(question_id="q1", question="Define scope?")
+        ],
+    )
+    state = SessionState(
+        prd_id="prd-002",
+        prd_content="some content",
+        policy_decision=PolicyDecision(allowed=True),
+        partial_report=partial,
+        created_at=datetime(2026, 7, 3, 12, 0, 0, tzinfo=timezone.utc),
+        expires_at=datetime(2026, 7, 3, 13, 0, 0, tzinfo=timezone.utc),
+    )
+    payload = state.model_dump(mode="json")
+    state2 = SessionState.model_validate(payload)
+    assert state2.prd_id == "prd-002"
+    assert state2.policy_decision.allowed is True
+    assert state2.partial_report.verdict is Verdict.NEEDS_CLARIFICATION
+    assert state2.partial_report.clarifying_questions[0].question_id == "q1"
+
+
+def test_triage_report_optional_session_id_defaults_none():
+    """session_id is optional and defaults to None on a plain report."""
+    r = TriageReport(prd_id="prd-001", verdict=Verdict.PASS)
+    assert r.session_id is None
+
+    r_with_session = TriageReport(
+        prd_id="prd-002",
+        verdict=Verdict.NEEDS_CLARIFICATION,
+        status="awaiting_pm",
+        session_id="sess-abc",
+    )
+    assert r_with_session.session_id == "sess-abc"
+    assert "session_id" in r_with_session.model_dump(mode="json")
+
+
+def test_session_not_found_is_exception():
+    """SessionNotFound subclasses Exception so callers can raise/catch it."""
+    assert issubclass(SessionNotFound, Exception)
+    with pytest.raises(SessionNotFound):
+        raise SessionNotFound("missing")
+
+
+def test_synthesis_output_round_trip():
+    """SynthesisOutput round-trips with verdict/raw_analysis/clarifying_questions."""
+    s = SynthesisOutput(
+        verdict=Verdict.NEEDS_CLARIFICATION,
+        raw_analysis="Score too low.",
+        clarifying_questions=[
+            ClarifyingQuestion(question_id="q1", question="Define 'fast'")
+        ],
+    )
+    payload = s.model_dump(mode="json")
+    s2 = SynthesisOutput.model_validate(payload)
+    assert s2.verdict is Verdict.NEEDS_CLARIFICATION
+    assert s2.raw_analysis == "Score too low."
+    assert len(s2.clarifying_questions) == 1
+    assert s2.clarifying_questions[0].question_id == "q1"
+
+
+def test_synthesis_output_defaults():
+    """SynthesisOutput requires only verdict; other fields default."""
+    s = SynthesisOutput(verdict=Verdict.PASS)
+    assert s.raw_analysis == ""
+    assert s.clarifying_questions == []

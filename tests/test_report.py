@@ -165,15 +165,15 @@ class TestFormatReportMinimal:
         """Spec: report SHALL contain all eight sections."""
         md = format_report(_full_report())
         for heading in [
-            "## 1. Policy Gate",
-            "## 2. Completeness Assessment",
-            "## 3. Clarity Assessment",
-            "## 4. Risk Register",
-            "## 5. Clarifying Questions for PM",
-            "## 6. PM Responses",
-            "## 7. Effort Estimate",
-            "## 8. Task Breakdown",
-            "## Audit Trail",
+            "## 1. 政策閘門",
+            "## 2. 完整性評估",
+            "## 3. 清晰度評估",
+            "## 4. 風險登記表",
+            "## 5. 待 PM 釐清的問題",
+            "## 6. PM 回應",
+            "## 7. 工作量估算",
+            "## 8. 任務拆解",
+            "## 審計軌跡",
         ]:
             assert heading in md, f"Missing section: {heading}"
 
@@ -199,19 +199,34 @@ class TestFormatReportFull:
 
     def test_estimate_in_output(self):
         md = format_report(_full_report())
-        assert "8.0 engineer-days" in md
-        assert "Low confidence" in md
+        assert "8.0 人天" in md
+        assert "低信心" in md
 
     def test_tickets_in_output(self):
         md = format_report(_full_report())
         assert "Design schema" in md
         assert "Implement API endpoint" in md
-        assert "Depends on" in md
+        assert "依賴於" in md
 
     def test_audit_trail_rows(self):
         md = format_report(_full_report())
         assert "| intake | `completed` |" in md
         assert "| synthesis | `completed` |" in md
+
+    def test_raw_analysis_uses_obsidian_callout(self):
+        md = format_report(_full_report())
+        assert "> [!note]- 原始分析" in md
+        assert "<details>" not in md
+        assert "> PRD lacks Given/When/Then scenarios entirely." in md
+
+    def test_raw_analysis_multiline_each_line_prefixed(self):
+        report = _full_report()
+        report.completeness.raw_analysis = "第一段。\n\n第二段。"
+        md = format_report(report)
+        assert "> [!note]- 原始分析" in md
+        assert "> 第一段。" in md
+        assert "> 第二段。" in md
+        assert "<details>" not in md
 
 
 class TestFormatReportRejected:
@@ -226,7 +241,7 @@ class TestFormatReportRejected:
 
     def test_no_estimate_section_populated(self):
         md = format_report(_rejected_report())
-        assert "Not reached" in md
+        assert "規劃中的擴充功能" in md
 
 
 # ---------------------------------------------------------------------------
@@ -256,5 +271,5 @@ class TestWriteReport:
     def test_file_content_is_valid_markdown(self, tmp_path):
         path = write_report(_full_report(), output_dir=tmp_path)
         content = path.read_text()
-        assert content.startswith("# PRD Triage Report")
-        assert "## Audit Trail" in content
+        assert content.startswith("# PRD 審查報告")
+        assert "## 審計軌跡" in content
