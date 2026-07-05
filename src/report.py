@@ -58,11 +58,10 @@ def format_report(report: TriageReport) -> str:
             lines.append("_所有必要章節齊全。_")
         if report.completeness.raw_analysis:
             lines.append("")
-            lines.append(f"<details><summary>原始分析</summary>")
+            lines.append("> [!note]- 原始分析")
+            for raw_line in report.completeness.raw_analysis.splitlines():
+                lines.append(f"> {raw_line}" if raw_line.strip() else ">")
             lines.append("")
-            lines.append(report.completeness.raw_analysis)
-            lines.append("")
-            lines.append("</details>")
     else:
         lines.append("_未執行（專家代理人未運行）。_")
     lines.append("")

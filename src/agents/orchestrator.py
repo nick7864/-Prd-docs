@@ -320,15 +320,25 @@ def _run_coro_safely(coro):
 def _parse(raw, model_cls):
     """Tolerantly parse a specialist state value.
 
-    Returns the value unchanged if already a ``model_cls`` instance, validates
-    if it's a ``dict`` (returning None on validation failure), and returns
-    ``None`` for anything else (None, malformed, unexpected types).
+    Handles three representations that can appear in ADK session state:
+    a validated model instance (passthrough), a dict (``model_validate``),
+    or a JSON string (``model_validate_json``). The string form is produced
+    by ``_prepare_synthesis_inputs``, which re-serializes specialist dicts
+    to JSON strings for synthesis prompt injection; without this branch the
+    orchestrator would read those strings AFTER synthesis runs and silently
+    lose all specialist data. Returns ``None`` for anything else (None,
+    malformed, unexpected types).
     """
     if isinstance(raw, model_cls):
         return raw
     if isinstance(raw, dict):
         try:
             return model_cls.model_validate(raw)
+        except Exception:
+            return None
+    if isinstance(raw, str):
+        try:
+            return model_cls.model_validate_json(raw)
         except Exception:
             return None
     return None
