@@ -100,6 +100,26 @@ def test_rejects_stripe_live_key():
     assert "stripe_live_key" in {v.type for v in decision.violations}
 
 
+def test_policy_violation_pattern_is_redacted():
+    """Secret/PII matched substrings are redacted before leaving check_policy."""
+    content = (
+        "key: AIzaSyDabc123def456ghi789jkl012mno345pqr\n"
+        "email: john@example.com\n"
+    )
+    decision = check_policy(content)
+
+    api_key_v = next(v for v in decision.violations if v.type == "google_api_key")
+    assert "AIzaSyDabc123def456ghi789jkl012mno345pqr" not in api_key_v.pattern
+    assert api_key_v.pattern.startswith("AIza")
+    assert "…" in api_key_v.pattern
+    assert len(api_key_v.pattern) <= 9
+
+    email_v = next(v for v in decision.violations if v.type == "email")
+    assert "john@example.com" not in email_v.pattern
+    assert "@" in email_v.pattern
+    assert "@example.com" in email_v.pattern
+
+
 # ---------------------------------------------------------------------------
 # Clean content
 # ---------------------------------------------------------------------------

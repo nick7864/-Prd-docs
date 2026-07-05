@@ -65,7 +65,14 @@ class PolicyViolation(BaseModel):
     type: str = Field(
         ..., description="Rule id, e.g. 'google_api_key', 'email', 'phone'"
     )
-    pattern: str = Field(..., description="The matched substring")
+    pattern: str = Field(
+        ...,
+        description=(
+            "The matched substring, redacted for safe display — "
+            "secret/PII patterns show prefix…suffix only; benign patterns "
+            "(identifier names, PEM labels) pass through unchanged."
+        ),
+    )
     line_number: Optional[int] = Field(
         None, ge=1, description="1-based line number where the match occurred"
     )
