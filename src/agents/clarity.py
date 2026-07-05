@@ -13,6 +13,8 @@ from google.adk.agents import LlmAgent
 
 from models.schemas import ClarityReport
 
+from ._model import build_model
+
 CLARITY_INSTRUCTION = """\
 You are a **Clarity Checker** for Product Requirement Documents (PRDs).
 
@@ -55,6 +57,12 @@ Phrases that could mean anything:
 Produce a ClarityReport with:
 - `ambiguous_items`: list of {phrase, type, generated_question}
 - `raw_analysis`: summary of overall clarity assessment
+
+## Output language
+All human-readable text fields (`generated_question`, `raw_analysis`) MUST be \
+written in Traditional Chinese (繁體中文). The flagged `phrase` itself stays in \
+its original language (quote the PRD verbatim). Field names and `type` values \
+stay in English as defined by the schema.
 """
 
 clarity_checker = LlmAgent(
@@ -64,7 +72,7 @@ clarity_checker = LlmAgent(
         "and undefined domain terms in the PRD. Generates clarifying questions "
         "addressed to the PM."
     ),
-    model="gemini-2.5-flash",
+    model=build_model(),
     instruction=CLARITY_INSTRUCTION,
     output_schema=ClarityReport,
     output_key="clarity_report",

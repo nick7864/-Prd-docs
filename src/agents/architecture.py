@@ -14,11 +14,36 @@ The MCP server (src/doc_mcp/server.py) still exists for external consumers \
 """
 from __future__ import annotations
 
+import json
+
 from google.adk.agents import LlmAgent
-from google.adk.tools import FunctionTool
 
 from doc_mcp.repository import get_architecture_context
 from models.schemas import ArchitectureReport
+
+from ._model import build_model
+
+
+def _prepare_architecture_context(callback_context):
+    """Read the architecture doc + ADRs in Python and inject as JSON.
+
+    Replaces the previous ADK ``FunctionTool`` so the architecture agent no
+    longer combines ``tools`` + ``output_schema`` (a Gemini-3.0-only pattern).
+    ADK's ``{var}`` injection stringifies dicts to Python repr, so we serialize
+    to JSON here for a clean prompt. A failed read writes the literal
+    ``"MISSING"`` so the agent can note the absence rather than abort.
+    """
+    try:
+        ctx = get_architecture_context()
+        if isinstance(ctx, dict) and "error" in ctx:
+            callback_context.state["architecture_context"] = "MISSING"
+        else:
+            callback_context.state["architecture_context"] = json.dumps(
+                ctx, ensure_ascii=False, default=str
+            )
+    except Exception:
+        callback_context.state["architecture_context"] = "MISSING"
+    return None
 
 ARCHITECTURE_INSTRUCTION = """\
 You are an **Architecture Fit Assessor** for Product Requirement Documents.
@@ -27,12 +52,10 @@ You are an **Architecture Fit Assessor** for Product Requirement Documents.
 Evaluate whether the PRD fits within the existing system architecture or \
 introduces conflicts, new components, or integration risks.
 
-## Step 1: Read the architecture context
-Call the `get_architecture_context` tool to retrieve:
-- The current system architecture document (services, data models, API surface)
-- The 3 most recent Architecture Decision Records (ADRs)
+## Architecture context (pre-loaded; "MISSING" means unavailable)
+{architecture_context}
 
-## Step 2: Evaluate the PRD against the architecture
+## Evaluate the PRD against the architecture
 
 ### Conflicts to detect
 - **Service boundary violations**: PRD asks one service to do another's job \
@@ -65,27 +88,26 @@ Produce an ArchitectureReport with:
 - `raw_analysis`: summary of architectural fit assessment
 
 ## Important
-- Always call `get_architecture_context` FIRST before evaluating. Do not \
-  evaluate based on assumptions about the system.
-- If the tool returns empty architecture_doc, note it in raw_analysis and \
-  evaluate based on general best practices.
-"""
+- The architecture context above is pre-loaded for you; do not call any tool.
+  If it is "MISSING", note that in raw_analysis and evaluate based on general
+  best practices.
 
-# Wrap the repository function as an ADK FunctionTool so the LLM agent can
-# call it during reasoning. The tool signature (no args → dict) is
-# auto-derived from the function's type hints.
-get_arch_context_tool = FunctionTool(func=get_architecture_context)
+## Output language
+All human-readable text fields (`description` for conflicts/integration points, \
+`raw_analysis`) MUST be written in Traditional Chinese (繁體中文). Field names \
+and `severity` enum values stay in English as defined by the schema.
+"""
 
 architecture_checker = LlmAgent(
     name="architecture_checker",
     description=(
-        "Reads the ShopFlow architecture doc + ADRs via the Document MCP "
-        "repository and evaluates the PRD for conflicts, new-service "
-        "requirements, and integration points."
+        "Reads the ShopFlow architecture doc + ADRs (pre-loaded into its prompt) "
+        "and evaluates the PRD for conflicts, new-service requirements, and "
+        "integration points."
     ),
-    model="gemini-2.5-flash",
+    model=build_model(),
     instruction=ARCHITECTURE_INSTRUCTION,
     output_schema=ArchitectureReport,
     output_key="architecture_report",
-    tools=[get_arch_context_tool],
+    before_agent_callback=_prepare_architecture_context,
 )

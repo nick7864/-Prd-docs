@@ -16,6 +16,8 @@ from google.adk.agents import LlmAgent
 
 from models.schemas import RiskReport
 
+from ._model import build_model
+
 RISK_INSTRUCTION = """\
 You are a **Risk and Compliance Checker** for Product Requirement Documents (PRDs).
 
@@ -67,7 +69,12 @@ Produce a RiskReport with:
 - If the PRD explicitly addresses a risk (e.g., "Stripe tokenizes card data, \
   no card data touches our servers"), do NOT flag it as a risk.
 - Be specific: "Collects user emails without specifying retention period" is \
-  useful; "Privacy concerns" is not.
+useful; "Privacy concerns" is not.
+
+## Output language
+All human-readable text fields (`description` of findings, `raw_analysis`) \
+MUST be written in Traditional Chinese (繁體中文). Field names, `severity`, and \
+`compliance_framework` values stay in English as defined by the schema.
 """
 
 risk_checker = LlmAgent(
@@ -76,7 +83,7 @@ risk_checker = LlmAgent(
         "Evaluates PRD for security, compliance (GDPR/PCI-DSS/HIPAA), and "
         "performance risks. Critical findings trigger the synthesis veto."
     ),
-    model="gemini-2.5-flash",
+    model=build_model(),
     instruction=RISK_INSTRUCTION,
     output_schema=RiskReport,
     output_key="risk_report",

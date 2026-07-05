@@ -116,6 +116,23 @@ uv run pytest tests/test_mcp_server.py # MCP server only
 uv run pytest tests/test_policy.py     # Policy gate only
 ```
 
+### Switch the LLM model (optional — e.g. GLM via OpenAI-compatible endpoint)
+
+The pipeline defaults to **Gemini**. To route all five agents through any
+OpenAI-compatible endpoint (GLM, OpenAI, a local model), set four environment
+variables — no code change needed:
+
+```bash
+export TRIAGE_MODEL_PROVIDER=openai_compat
+export TRIAGE_MODEL=glm-5.2                 # bare name is auto-prefixed with openai/
+export TRIAGE_API_BASE=https://your-endpoint/api/v1
+export TRIAGE_API_KEY=your-key              # ZHIPUAI_API_KEY / OPENAI_API_KEY also accepted
+```
+
+Leave them unset to keep using Gemini. The `architecture_checker` agent reads
+its architecture context via a Python `before_agent_callback` (not an ADK
+tool), so it runs on any provider — no Gemini-only dependency remains.
+
 ## Usage
 
 ### Interactive playground (ADK Web UI)

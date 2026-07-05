@@ -29,29 +29,46 @@ from __future__ import annotations
 from dotenv import load_dotenv
 
 # Load .env (e.g. GOOGLE_API_KEY) for CLI / FastAPI / pytest entry points that
-# bypass the MCP server. No-op when .env is absent.
-load_dotenv()
+# bypass the MCP server. override=True so a stale EMPTY value already in the
+# environment (e.g. an exported GOOGLE_API_KEY="") cannot shadow the real key
+# in .env — otherwise specialists silently get skipped with "key not set".
+load_dotenv(override=True)
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from google.adk.agents import LlmAgent, ParallelAgent, SequentialAgent
 
+# Apply the markdown fence-stripping patch for non-Gemini providers (e.g. GLM
+# wraps structured JSON in ```json fences; ADK's validate_schema rejects that).
+# Imported for its side effect; must come after the google.adk import above.
+from . import _schema_fence_patch  # noqa: F401
+
 from doc_mcp.repository import get_prd
 from models.schemas import (
+    ArchitectureReport,
     AuditEntry,
     ClarifyingQuestion,
+    ClarityReport,
+    CompletenessReport,
     PmAnswer,
     PolicyDecision,
+    RiskReport,
+    SessionNotFound,
+    SessionState,
     Severity,
+    SynthesisOutput,
     TriageReport,
     Verdict,
 )
 from policy.checker import check_policy
+from sessions.registry import SessionRegistry, default_ttl_seconds
 
 from .architecture import architecture_checker
 from .clarity import clarity_checker
 from .completeness import completeness_checker
+from ._model import _has_model_key
 from .risk import risk_checker
 from .synthesis import synthesis_agent
 
@@ -100,21 +117,12 @@ def _policy_gate(prd_content: str) -> PolicyDecision:
     return check_policy(prd_content)
 
 
-def triage(prd_id: str) -> TriageReport:
-    """Run the full PRD triage pipeline.
+def _run_pipeline(prd_id: str) -> TriageReport:
+    """Run intake → policy → specialists → synthesis and return the report.
 
-    Steps:
-    1. Intake — read PRD from repository via MCP tool.
-    2. Policy gate — reject if PII/secrets found.
-    3. Specialists (parallel) — Completeness + Clarity analysis (ADK graph).
-    4. Synthesis — merge into TriageReport with verdict.
-
-    Returns a TriageReport regardless of outcome (reject, needs_clarification,
-    or pass). Never raises on expected failures (missing PRD, policy reject).
-
-    NOTE: Steps 3-4 require the ADK Runner + GOOGLE_API_KEY. When the key is \
-    not set, this function returns the intake/policy result with \
-    status="terminated" and a note in audit_trail.
+    This is the shared pipeline body. The public ``triage()`` is a thin
+    non-interactive wrapper over it; ``start_triage()`` calls it then decides
+    whether to pause for HITL.
     """
     import os
     import sys
@@ -146,7 +154,7 @@ def triage(prd_id: str) -> TriageReport:
             AuditEntry(
                 stage="policy",
                 status="completed",
-                error=f"Rejected: {[v.type for v in decision.violations]}",
+                error=f"已駁回：{[v.type for v in decision.violations]}",
             )
         )
         return TriageReport(
@@ -159,13 +167,12 @@ def triage(prd_id: str) -> TriageReport:
     audit.append(AuditEntry(stage="policy", status="completed"))
 
     # --- Step 3-4: ADK pipeline (specialists + synthesis) ---
-    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    if not api_key:
+    if not _has_model_key():
         audit.append(
             AuditEntry(
                 stage="specialists",
                 status="skipped",
-                error="GOOGLE_API_KEY not set; cannot run LLM agents",
+                error="GOOGLE_API_KEY 未設定；無法執行 LLM 代理人",
             )
         )
         return TriageReport(
@@ -176,14 +183,11 @@ def triage(prd_id: str) -> TriageReport:
             policy_decision=decision,
         )
 
-    # Run the ADK pipeline via Runner.
-    # NOTE: This path is exercised in integration tests with GOOGLE_API_KEY set.
-    # The Runner API may vary by ADK version; see ADK docs for current usage.
+    # Run the ADK pipeline via Runner. _run_adk_pipeline (via _assemble_report)
+    # owns the specialists/synthesis audit entries and sets result.audit_trail,
+    # so this try block only attaches policy_decision on success.
     try:
-        result = _run_coro_safely(_run_adk_pipeline(prd_id, prd["content"]))
-        audit.append(AuditEntry(stage="specialists", status="completed"))
-        audit.append(AuditEntry(stage="synthesis", status="completed"))
-        result.audit_trail = audit
+        result = _run_coro_safely(_run_adk_pipeline(prd_id, prd["content"], audit))
         result.policy_decision = decision
         return result
     except Exception as exc:
@@ -198,6 +202,93 @@ def triage(prd_id: str) -> TriageReport:
             audit_trail=audit,
             policy_decision=decision,
         )
+
+
+# ---------------------------------------------------------------------------
+# Public entry points
+# ---------------------------------------------------------------------------
+
+# Module-level singleton shared by start_triage/resume_triage and the HTTP layer.
+_session_registry = SessionRegistry()
+
+
+def get_session_registry() -> SessionRegistry:
+    """Return the process-wide HITL session registry (shared with HTTP layer)."""
+    return _session_registry
+
+
+def triage(prd_id: str) -> TriageReport:
+    """Non-interactive full pipeline run (MCP tool / CLI entry point).
+
+    Runs the full pipeline synchronously and never pauses for human input.
+    Behavior is unchanged from before the HITL work: it returns a single
+    TriageReport with status ``completed`` or ``terminated``, ``session_id``
+    left None, and creates no session.
+    """
+    return _run_pipeline(prd_id)
+
+
+def start_triage(prd_id: str) -> tuple[TriageReport, str | None]:
+    """Run the pipeline, pausing for HITL when synthesis raises questions.
+
+    Returns ``(report, session_id)``. When the report's verdict is not reject
+    AND it carries clarifying questions, the report is stored in the session
+    registry, marked ``status="awaiting_pm"`` with its ``session_id`` set, and
+    the session id is returned. Otherwise the report is returned with
+    ``session_id=None`` (status stays ``completed`` or ``terminated``).
+    """
+    report = _run_pipeline(prd_id)
+
+    should_pause = (
+        report.verdict is not Verdict.REJECT
+        and report.status != "terminated"
+        and bool(report.clarifying_questions)
+    )
+    if not should_pause:
+        return report, None
+
+    prd = _intake(prd_id)
+    prd_content = prd.get("content", "")
+    now = datetime.now(timezone.utc)
+    state = SessionState(
+        prd_id=prd_id,
+        prd_content=prd_content,
+        policy_decision=report.policy_decision or PolicyDecision(allowed=True),
+        partial_report=report,
+        created_at=now,
+        expires_at=now + timedelta(seconds=default_ttl_seconds()),
+    )
+    session_id = _session_registry.create(state)
+    report.status = "awaiting_pm"
+    report.session_id = session_id
+    return report, session_id
+
+
+def resume_triage(
+    session_id: str,
+    answers: list[PmAnswer],
+    override: bool = False,
+) -> TriageReport:
+    """Finalize a paused report with the PM's answers.
+
+    Raises ``SessionNotFound`` if the session does not exist or has expired.
+    Otherwise copies the answers into the report's ``pm_responses``, sets
+    ``status="completed"``; when ``override`` is True, additionally sets
+    ``hitl_overridden=True`` and ``verdict=pass``. Deletes the session.
+    """
+    state = _session_registry.get(session_id)
+    if state is None:
+        raise SessionNotFound(session_id)
+
+    report = state.partial_report
+    report.pm_responses = list(answers)
+    if override:
+        report.hitl_overridden = True
+        report.verdict = Verdict.PASS
+    report.status = "completed"
+    report.session_id = None
+    _session_registry.delete(session_id)
+    return report
 
 
 def _run_coro_safely(coro):
@@ -219,20 +310,165 @@ def _run_coro_safely(coro):
         return pool.submit(asyncio.run, coro).result()
 
 
-async def _run_adk_pipeline(prd_id: str, prd_content: str) -> TriageReport:
+# ---------------------------------------------------------------------------
+# Deterministic assembly (fix-synthesis-state) — synthesis is advisory; the
+# orchestrator owns the final TriageReport, verdict, and audit for the
+# specialists/synthesis stages.
+# ---------------------------------------------------------------------------
+
+
+def _parse(raw, model_cls):
+    """Tolerantly parse a specialist state value.
+
+    Returns the value unchanged if already a ``model_cls`` instance, validates
+    if it's a ``dict`` (returning None on validation failure), and returns
+    ``None`` for anything else (None, malformed, unexpected types).
+    """
+    if isinstance(raw, model_cls):
+        return raw
+    if isinstance(raw, dict):
+        try:
+            return model_cls.model_validate(raw)
+        except Exception:
+            return None
+    return None
+
+
+def _compute_verdict(
+    completeness: CompletenessReport | None,
+    clarity: ClarityReport | None,
+) -> tuple[Verdict, str]:
+    """Deterministic verdict per the documented MVP rule.
+
+    PASS when completeness_score >= 80 AND fewer than 3 clarifying questions
+    (clarity ambiguities); otherwise NEEDS_CLARIFICATION. A missing
+    completeness report counts as score 0. Returns (verdict, reason).
+    """
+    score = completeness.completeness_score if completeness else 0
+    q_count = len(clarity.ambiguous_items) if clarity else 0
+    if score >= 80 and q_count < 3:
+        return Verdict.PASS, f"分數={score}，問題數={q_count}"
+    reasons = []
+    if score < 80:
+        reasons.append(f"完整度分數={score} < 80")
+    if q_count >= 3:
+        reasons.append(f"待釐清問題 {q_count} 個 ≥ 3")
+    return Verdict.NEEDS_CLARIFICATION, "、".join(reasons)
+
+
+def _collect_questions(
+    clarity: ClarityReport | None,
+    architecture: ArchitectureReport | None,
+    synth: SynthesisOutput | None,
+) -> list[ClarifyingQuestion]:
+    """Build the clarifying_questions list from clarity, architecture, synthesis.
+
+    Clarity ambiguities are the primary source (they carry generated_question).
+    High/critical architecture conflicts are surfaced as questions. The
+    synthesis LLM's own questions are merged in (deduped by question_id).
+    """
+    collected: list[ClarifyingQuestion] = []
+    seen: set[str] = set()
+
+    def _add(q: ClarifyingQuestion) -> None:
+        if q.question_id not in seen:
+            seen.add(q.question_id)
+            collected.append(q)
+
+    if clarity:
+        for i, item in enumerate(clarity.ambiguous_items):
+            _add(ClarifyingQuestion(
+                question_id=f"clarity_{i}",
+                question=item.generated_question,
+                context=f"模糊詞彙：'{item.phrase}'（{item.type}）",
+            ))
+    if architecture:
+        for i, conflict in enumerate(architecture.conflicts):
+            if conflict.severity in (Severity.HIGH, Severity.CRITICAL):
+                _add(ClarifyingQuestion(
+                    question_id=f"arch_{i}",
+                    question=(
+                        f"架構衝突（{conflict.severity.value}）："
+                        f"{conflict.description} —— 應如何解決？"
+                    ),
+                ))
+    if synth:
+        for q in synth.clarifying_questions:
+            _add(q)
+    return collected
+
+
+def _assemble_report(
+    prd_id: str,
+    completeness: CompletenessReport | None,
+    clarity: ClarityReport | None,
+    architecture: ArchitectureReport | None,
+    risk: RiskReport | None,
+    synth: SynthesisOutput | None,
+    audit: list[AuditEntry],
+) -> TriageReport:
+    """Deterministically assemble the final TriageReport.
+
+    The orchestrator (not any LLM) sets prd_id, specialist sub-objects,
+    clarifying_questions, and audit_trail. Verdict is computed by rule; the
+    LLM's suggestion is recorded but does not win. Missing synthesis degrades
+    gracefully. ``apply_critical_risk_veto`` is enforced before returning.
+    """
+    audit.append(AuditEntry(stage="specialists", status="completed"))
+
+    rule_verdict, reason = _compute_verdict(completeness, clarity)
+    questions = _collect_questions(clarity, architecture, synth)
+
+    # Append all synthesis audit entries BEFORE constructing the report —
+    # Pydantic copies audit_trail on assignment, so later mutations to `audit`
+    # would not surface on the report.
+    if synth is None:
+        audit.append(AuditEntry(
+            stage="synthesis",
+            status="failed",
+            error="synthesis 未產出結果，使用 deterministic 組裝",
+        ))
+    else:
+        audit.append(AuditEntry(stage="synthesis", status="completed"))
+        if synth.verdict is not None and synth.verdict != rule_verdict:
+            audit.append(AuditEntry(
+                stage="synthesis",
+                status="completed",
+                error=(
+                    f"LLM 建議 {synth.verdict.value}，"
+                    f"規則採用 {rule_verdict.value}（{reason}）"
+                ),
+            ))
+
+    report = TriageReport(
+        prd_id=prd_id,
+        verdict=rule_verdict,
+        status="completed",
+        completeness=completeness,
+        clarity=clarity,
+        architecture=architecture,
+        risk=risk,
+        clarifying_questions=questions,
+        audit_trail=audit,
+    )
+
+    # Safety veto: a critical risk finding overrides even a rule-PASS.
+    return apply_critical_risk_veto(report)
+
+
+async def _run_adk_pipeline(
+    prd_id: str, prd_content: str, audit: list[AuditEntry]
+) -> TriageReport:
     """Invoke the ADK Runner to execute the specialist + synthesis pipeline.
 
-    This is the integration path that requires GOOGLE_API_KEY. The Runner API:
-    1. Creates an InMemorySession.
-    2. Sends the PRD content as user message.
-    3. Runs root_agent (SequentialAgent → ParallelAgent → Synthesis).
-    4. Reads the synthesis output from state["triage_report"].
+    Reads the four specialist outputs and the advisory synthesis output from
+    session state and deterministically assembles the final TriageReport via
+    ``_assemble_report``. Never raises when synthesis output is absent — that
+    degrades gracefully.
 
     ADK 2.x ships ``InMemorySessionService.create_session`` and ``get_session``
     as coroutines — they MUST be awaited. ``Runner.run`` is a synchronous
-    generator and MUST NOT be awaited. Callers MUST drive this function via
-    ``asyncio.run`` from a synchronous context (see spec
-    ``triage-pipeline-runtime``).
+    generator and MUST NOT be awaited.
     """
     from google.adk.runners import Runner
     from google.adk.sessions import InMemorySessionService
@@ -251,7 +487,7 @@ async def _run_adk_pipeline(prd_id: str, prd_content: str) -> TriageReport:
 
     user_message = genai_types.Content(
         role="user",
-        parts=[genai_types.Part.from_text(text=f"Analyze this PRD:\n\n{prd_content}")],
+        parts=[genai_types.Part.from_text(text=f"請分析以下 PRD：\n\n{prd_content}")],
     )
 
     # Runner.run is a synchronous generator in ADK 2.x — do NOT await it.
@@ -267,17 +503,14 @@ async def _run_adk_pipeline(prd_id: str, prd_content: str) -> TriageReport:
     )
     state = final_session.state
 
-    # Synthesis agent writes to state["triage_report"].
-    report_data = state.get("triage_report")
-    if report_data is None:
-        raise RuntimeError("Synthesis agent did not produce a triage_report in state")
+    completeness = _parse(state.get("completeness_report"), CompletenessReport)
+    clarity = _parse(state.get("clarity_report"), ClarityReport)
+    architecture = _parse(state.get("architecture_report"), ArchitectureReport)
+    risk = _parse(state.get("risk_report"), RiskReport)
+    synth = _parse(state.get("synthesis_output"), SynthesisOutput)
 
-    if isinstance(report_data, TriageReport):
-        return report_data
-    if isinstance(report_data, dict):
-        return TriageReport.model_validate(report_data)
-    raise RuntimeError(
-        f"Unexpected triage_report type in state: {type(report_data).__name__}"
+    return _assemble_report(
+        prd_id, completeness, clarity, architecture, risk, synth, audit
     )
 
 
@@ -309,11 +542,11 @@ def apply_critical_risk_veto(report: TriageReport) -> TriageReport:
             veto_q = ClarifyingQuestion(
                 question_id="critical_risk_veto",
                 question=(
-                    f"Critical risk identified: {finding.description}. "
-                    "How will this be mitigated before implementation begins?"
+                    f"已識別嚴重風險：{finding.description}。"
+                    "在開始實作前，此風險應如何緩解？"
                 ),
                 context=(
-                    f"Compliance framework: {finding.compliance_framework}"
+                    f"合規框架：{finding.compliance_framework}"
                     if finding.compliance_framework
                     else None
                 ),
@@ -359,27 +592,27 @@ def hitl_gate_cli(
 
     # Interactive prompt (printed to stdout; tests capture via capsys).
     print("\n" + "=" * 60)
-    print("HITL GATE: Pipeline paused for PM clarification")
+    print("HITL 閘門：流程已暫停，等待 PM 釐清")
     print("=" * 60)
-    print(f"\nPRD: {report.prd_id}")
-    print(f"Verdict: {report.verdict.value}")
-    print(f"\n{len(report.clarifying_questions)} clarifying question(s):\n")
+    print(f"\n需求文件：{report.prd_id}")
+    print(f"判斷：{report.verdict.value}")
+    print(f"\n共 {len(report.clarifying_questions)} 個待釐清問題：\n")
 
     for i, q in enumerate(report.clarifying_questions, 1):
-        print(f"  Q{i} [{q.question_id}]: {q.question}")
+        print(f"  問題 {i} [{q.question_id}]: {q.question}")
         if q.context:
-            print(f"     Context: {q.context}")
+            print(f"     上下文：{q.context}")
 
     print("\n" + "-" * 60)
-    print("Enter answers (one per question) or type 'override' to force-pass.")
+    print("請輸入回答（每題一行），或輸入 'override' / '覆寫' 直接強制通過。")
     print("-" * 60 + "\n")
 
     answers: list[PmAnswer] = []
     overridden = False
 
     for q in report.clarifying_questions:
-        response = input_fn(f"Answer [{q.question_id}]: ").strip()
-        if response.lower() == "override":
+        response = input_fn(f"回答 [{q.question_id}]: ").strip()
+        if response.lower() in ("override", "覆寫"):
             overridden = True
             break
         answers.append(PmAnswer(question_id=q.question_id, answer=response))

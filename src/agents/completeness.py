@@ -14,6 +14,8 @@ from google.adk.agents import LlmAgent
 
 from models.schemas import CompletenessReport
 
+from ._model import build_model
+
 COMPLETENESS_INSTRUCTION = """\
 You are a **Completeness Checker** for Product Requirement Documents (PRDs) \
 in a software engineering team.
@@ -52,6 +54,11 @@ Produce a CompletenessReport with:
 - `completeness_score`: integer 0-100
 - `missing_sections`: list of {section, severity} for each missing/thin section
 - `raw_analysis`: 2-3 paragraphs of detailed reasoning
+
+## Output language
+All human-readable text fields (`raw_analysis`, and any free-text reasoning) \
+MUST be written in Traditional Chinese (繁體中文). Field names, the `section` \
+identifiers, and `severity` enum values stay in English as defined by the schema.
 """
 
 completeness_checker = LlmAgent(
@@ -61,7 +68,7 @@ completeness_checker = LlmAgent(
         "user stories, acceptance criteria, non-functional requirements, "
         "edge cases, and out-of-scope."
     ),
-    model="gemini-2.5-flash",
+    model=build_model(),
     instruction=COMPLETENESS_INSTRUCTION,
     output_schema=CompletenessReport,
     output_key="completeness_report",

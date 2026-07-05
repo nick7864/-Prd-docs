@@ -1,73 +1,95 @@
-"""Synthesis Agent — merges specialist reports into a structured TriageReport.
+"""Synthesis Agent — advisory merger of specialist reports.
 
-Per spec D4 + design.md Decision: Synthesis Agent with critical-risk veto logic.
-
-The synthesis agent consumes the specialist reports (stored in workflow state \
-via output_key) and produces a single TriageReport with an overall verdict.
-
-In the MVP (D3-D4): verdict is `pass` when completeness_score ≥ 80 AND < 3 \
-clarifying questions, else `needs_clarification`.
-
-In D5+: a deterministic post-check vetoes to `needs_clarification` if any \
-Risk finding has severity=critical, regardless of LLM output. This check is \
-implemented in the orchestrator, not in this LLM agent — per design.md: \
-"LLM 對 critical 是否該擋的判斷不穩定,但這是安全關鍵決策,必須可預測".
+Per change ``fix-synthesis-state``: synthesis is an ADVISORY LlmAgent. It emits
+a small ``SynthesisOutput`` (verdict suggestion + reasoning + clarifying
+questions); the orchestrator deterministically assembles the final
+``TriageReport`` from specialist state and computes the authoritative verdict.
+``output_key`` is ``"synthesis_output"``; the orchestrator reads it
+tolerantly and degrades gracefully when it is absent.
 """
 from __future__ import annotations
 
+import json
+
 from google.adk.agents import LlmAgent
 
-from models.schemas import TriageReport
+from models.schemas import SynthesisOutput
+
+from ._model import build_model
 
 SYNTHESIS_INSTRUCTION = """\
-You are the **Synthesis Agent** for a PRD Triage pipeline.
+You are the **Synthesis Agent** for a PRD Triage pipeline — an ADVISORY role.
+You receive reports from the specialist agents (JSON) and propose an overall
+verdict. The system applies its own deterministic rule on top of your
+suggestion, so focus on sound reasoning, not on being the final decider.
 
-## Your job
-You receive reports from specialist agents (Completeness, Clarity, and \
-optionally Architecture and Risk). Merge their findings into a single \
-TriageReport with an overall verdict.
+## Specialist reports
 
-## Verdict decision rules (MVP — Completeness + Clarity only)
+### Completeness
+{completeness_report}
 
-1. **PASS**: completeness_score ≥ 80 AND fewer than 3 clarifying questions.
-2. **NEEDS_CLARIFICATION**: completeness_score < 80 OR 3+ clarifying questions \
-   OR any finding with severity = "critical".
-3. **REJECT**: only when policy gate has already rejected (you won't be called).
+### Clarity
+{clarity_report}
 
-When Architecture and Risk agents are active (D5+):
-- Add: any Risk finding with severity = "critical" → force NEEDS_CLARIFICATION.
-- Add: any Architecture conflict with severity = "high" → count toward \
-  clarifying questions threshold.
+### Architecture (optional — "MISSING" means the agent did not run)
+{architecture_report?}
 
-## TriageReport fields to populate
-- `prd_id`: from the input context
-- `verdict`: "pass" | "needs_clarification" | "reject"
-- `completeness`: the CompletenessReport object
-- `clarity`: the ClarityReport object
-- `architecture`: (if available) the ArchitectureReport
-- `risk`: (if available) the RiskReport
-- `risk_register`: consolidated list of all findings across specialists
-- `clarifying_questions`: all clarifying questions from Clarity + any from \
-  Architecture conflicts, formatted as {question_id, question, context}
-- `audit_trail`: which agents ran and their statuses
-- `hitl_overridden`: false (set by HITL gate, not here)
+### Risk (optional — "MISSING" means the agent did not run)
+{risk_report?}
 
-## Important
-- Do NOT fabricate findings not present in the specialist reports.
-- If a specialist report is missing (agent failed), note it in audit_trail \
-  with status "failed" and do NOT block the verdict on missing data.
-- Your raw_analysis should explain WHY you chose this verdict in 2-3 sentences.
+## Verdict suggestion rules
+1. **PASS**: completeness_score >= 80 AND fewer than 3 clarifying questions.
+2. **NEEDS_CLARIFICATION**: otherwise, or any finding with severity = "critical".
+3. **REJECT**: never (the policy gate already handled rejection upstream).
+
+## Output
+Produce a SynthesisOutput with:
+- `verdict`: your suggested "pass" | "needs_clarification".
+- `raw_analysis`: 2-3 sentences explaining WHY.
+- `clarifying_questions`: list of {question_id, question, context?} drawn from
+  clarity ambiguities and architecture conflicts you consider worth asking.
+
+Do NOT include prd_id, audit_trail, or the specialist sub-objects — the
+orchestrator fills those. Do NOT fabricate findings not in the reports above.
+
+## Output language
+All human-readable text fields (`raw_analysis`, and the `question`/`context` of \
+each clarifying question) MUST be written in Traditional Chinese (繁體中文). \
+Field names and `verdict` enum values stay in English as defined by the schema.
 """
+
+
+def _prepare_synthesis_inputs(callback_context):
+    """JSON-serialize specialist state before synthesis runs.
+
+    ADK's ``{var}`` injection uses ``str(value)``, so a dict would render as
+    Python repr (single quotes) rather than JSON. We overwrite each specialist
+    state key with a JSON string so the instruction receives clean JSON. An
+    absent optional specialist becomes the literal ``"MISSING"`` so the prompt
+    can tell "agent did not run" apart from "agent produced an empty report".
+    """
+    state = callback_context.state
+    for key in ("completeness_report", "clarity_report",
+                "architecture_report", "risk_report"):
+        raw = state.get(key)
+        if isinstance(raw, dict):
+            state[key] = json.dumps(raw, ensure_ascii=False, default=str)
+    for key in ("architecture_report", "risk_report"):
+        if state.get(key) is None:
+            state[key] = "MISSING"
+    return None
+
 
 synthesis_agent = LlmAgent(
     name="synthesis_agent",
     description=(
-        "Merges specialist reports (Completeness, Clarity, Architecture, Risk) "
-        "into a single TriageReport with an overall verdict. Applies MVP "
-        "verdict rules: pass when completeness ≥ 80 and < 3 clarifications."
+        "Advisory merger of specialist reports into a small SynthesisOutput "
+        "(verdict suggestion + reasoning + clarifying questions). The "
+        "orchestrator assembles the final TriageReport deterministically."
     ),
-    model="gemini-2.5-flash",
+    model=build_model(),
     instruction=SYNTHESIS_INSTRUCTION,
-    output_schema=TriageReport,
-    output_key="triage_report",
+    output_schema=SynthesisOutput,
+    output_key="synthesis_output",
+    before_agent_callback=_prepare_synthesis_inputs,
 )

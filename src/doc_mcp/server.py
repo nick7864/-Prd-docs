@@ -19,8 +19,9 @@ from __future__ import annotations
 from dotenv import load_dotenv
 
 # Load .env (e.g. GOOGLE_API_KEY) before sibling modules read env vars.
-# No-op when .env is absent; see .env.example for required vars.
-load_dotenv()
+# override=True so a stale EMPTY value in the environment cannot shadow the
+# real key in .env. No-op when .env is absent; see .env.example for required vars.
+load_dotenv(override=True)
 
 from mcp.server.fastmcp import FastMCP
 

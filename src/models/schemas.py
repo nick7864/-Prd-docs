@@ -9,6 +9,7 @@ Field names mirror the spec contracts in
 """
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import Literal, Optional
 
@@ -201,6 +202,26 @@ class PmAnswer(BaseModel):
     answer: str
 
 
+class ResumeTriageRequest(BaseModel):
+    """Body for ``POST /triage/sessions/{id}/resume``."""
+
+    answers: list[PmAnswer] = Field(default_factory=list)
+    override: bool = False
+
+
+class SynthesisOutput(BaseModel):
+    """Advisory output of the synthesis agent.
+
+    Synthesis only emits this small, reliably-producible shape; the orchestrator
+    owns assembling the final ``TriageReport``. ``verdict`` here is a suggestion
+    that the orchestrator's deterministic rule may override.
+    """
+
+    verdict: Verdict
+    raw_analysis: str = ""
+    clarifying_questions: list[ClarifyingQuestion] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Estimation + Task Breakdown (D7 bonus)
 # ---------------------------------------------------------------------------
@@ -277,6 +298,10 @@ class TriageReport(BaseModel):
     prd_id: str
     verdict: Verdict
     status: Literal["completed", "awaiting_pm", "terminated"] = "completed"
+    session_id: Optional[str] = Field(
+        None,
+        description="Set when status='awaiting_pm'; identifies the HITL session to resume.",
+    )
 
     # Specialist outputs (None when that agent failed or didn't run)
     completeness: Optional[CompletenessReport] = None
@@ -298,3 +323,33 @@ class TriageReport(BaseModel):
     audit_trail: list[AuditEntry] = Field(default_factory=list)
     hitl_overridden: bool = False
     policy_decision: Optional[PolicyDecision] = None
+
+
+# ---------------------------------------------------------------------------
+# HITL sessions (add-web-frontend)
+# ---------------------------------------------------------------------------
+
+
+class SessionNotFound(Exception):
+    """Raised when a HITL session id does not exist or has expired.
+
+    Raised by ``resume_triage`` and the HTTP resume/status endpoints to signal
+    a 404 back to the caller.
+    """
+
+
+class SessionState(BaseModel):
+    """Frozen snapshot of a paused triage, stored in ``SessionRegistry``.
+
+    Holds everything ``resume_triage`` needs to finalise the report without
+    re-running intake/policy/specialists: the original PRD content, the policy
+    decision, and the partial report produced by synthesis (which carries the
+    clarifying questions the PM must answer).
+    """
+
+    prd_id: str
+    prd_content: str
+    policy_decision: PolicyDecision
+    partial_report: TriageReport
+    created_at: datetime
+    expires_at: datetime
