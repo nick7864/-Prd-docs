@@ -134,7 +134,7 @@ def format_report(report: TriageReport) -> str:
         if report.estimate.drivers:
             lines.append(f"- **影響因子**：{', '.join(report.estimate.drivers)}")
     else:
-        lines.append("_未執行（估算代理人未啟用或流程提前終止）。_")
+        lines.append("_工作量估算為規劃中的擴充功能（D7 bonus）。_")
     lines.append("")
 
     # Section 8: Task Breakdown
@@ -152,7 +152,7 @@ def format_report(report: TriageReport) -> str:
                 lines.append(f"- **依賴於**：{', '.join(t.dependencies)}")
             lines.append("")
     else:
-        lines.append("_未執行（拆解代理人未啟用或流程提前終止）。_")
+        lines.append("_任務拆解為規劃中的擴充功能（D7 bonus）。_")
     lines.append("")
 
     # Audit Trail (always present)
